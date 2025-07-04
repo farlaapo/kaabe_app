@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kaabe_app
+    depends_on:
+      - db
+      - redis
+    environment:
+      - PORT=8080
+      - DB_HOST=db                          # ✅ FIXED: should match the service name of the database
+      - DB_PORT=5432
+      - DB_USER=kaabe_user
+      - DB_PASSWORD=kaabe_password
+      - DB_NAME=kaabe
+      - DB_SSLMODE=disable
+      - DATABASE_URL=postgres://kaabe_user:kaabe_password@db:5432/kaabe?sslmode=disable  # ✅ ensure it matches the other DB_* values
+      - JWT_SECRET=your_super_secret_key
+      - JWT_REFRESH_SECRET=your_super_refresh_secret_key
+      - REDIS_URL=redis://redis:6379
+      - WAAFI_MERCHANT_UID=your_waafi_merchant_uid
+      - ENV=development
+    volumes:
+      - ./pkg/config/.env:/app/.env
+      - ./internal/config/config.yaml:/app/config/config.yaml
+    ports:
+      - "8080:8080"
+    networks:
+      - kaabe_network
+
+  db:
+    image: postgres:12
+    container_name: postgres_db
+    environment:
+      POSTGRES_DB: kaabe
+      POSTGRES_USER: kaabe_user
+      POSTGRES_PASSWORD: kaabe_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"   # you connect externally on port 5433, but internal port is 5432
+    networks:
+      - kaabe_network
+
+  redis:
+    image: redis:6.2
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - kaabe_network
+
+volumes:
+  pgdata:
+
+networks:
+  kaabe_network:
+    driver: bridge

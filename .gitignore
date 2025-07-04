@@ -1,0 +1,29 @@
+# Go binaries
+*.exe
+*.out
+*.test
+
+# Build directories
+/bin/
+/build/
+/dist/
+
+# Dependency management
+vendor/
+
+# Environment variables
+.env
+.env.*
+
+# Docker files
+docker-compose.override.yml
+
+# IDE/editor config
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+# Custom ignore
+my-secret-config.yaml
