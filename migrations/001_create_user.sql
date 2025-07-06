@@ -2,17 +2,10 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Create ENUM type for user_role if not exists
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-        CREATE TYPE user_role AS ENUM ('user', 'admin', 'influencer');
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
+-- 1. Create ENUM for user roles (run once)
+CREATE TYPE user_role AS ENUM ('admin', 'user', 'influencer');
 
-
--- 1. Create users table (run once)
+-- 2. Create users table
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email VARCHAR(255) UNIQUE NOT NULL,
@@ -21,24 +14,26 @@ CREATE TABLE IF NOT EXISTS users (
     last_name VARCHAR(100) NOT NULL,
     role user_role NOT NULL DEFAULT 'user',
     wallet_id UUID,
+    reset_token UUID,
+    reset_token_expiry TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-
+-- 3. Function: create_user
 CREATE OR REPLACE FUNCTION public.create_user(
-    p_email character varying,
-    p_password text,
-    p_first_name character varying,
-    p_last_name character varying,
+    p_email VARCHAR,
+    p_password TEXT,
+    p_first_name VARCHAR,
+    p_last_name VARCHAR,
     p_role user_role DEFAULT 'user',
-    p_wallet_id uuid DEFAULT NULL::uuid
+    p_wallet_id UUID DEFAULT NULL
 )
-RETURNS uuid
+RETURNS UUID
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    new_user_id uuid;
+    new_user_id UUID;
 BEGIN
     INSERT INTO users (id, email, password, first_name, last_name, role, wallet_id)
     VALUES (uuid_generate_v4(), p_email, p_password, p_first_name, p_last_name, p_role, p_wallet_id)
@@ -48,16 +43,14 @@ BEGIN
 END;
 $$;
 
-
-
--- 2. Function: get_user_by_email
+-- 4. Function: get_user_by_email
 CREATE OR REPLACE FUNCTION get_user_by_email(p_email VARCHAR)
 RETURNS TABLE (
     id UUID,
-    email VARCHAR,
+    email VARCHAR(255),
     password TEXT,
-    first_name VARCHAR,
-    last_name VARCHAR,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
     role user_role,
     wallet_id UUID,
     created_at TIMESTAMP,
@@ -70,16 +63,15 @@ AS $$
     WHERE email = p_email;
 $$;
 
-
--- 3. Function: get_user_by_id
+-- 5. Function: get_user_by_id
 CREATE OR REPLACE FUNCTION get_user_by_id(p_id UUID)
 RETURNS TABLE (
     id UUID,
-    email TEXT,
+    email VARCHAR(255),
     password TEXT,
-    first_name TEXT,
-    last_name TEXT,
-    role TEXT,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    role user_role,
     wallet_id UUID,
     created_at TIMESTAMP,
     updated_at TIMESTAMP
@@ -88,30 +80,20 @@ LANGUAGE plpgsql AS $$
 BEGIN
     RETURN QUERY
     SELECT 
-        id,
-        email,
-        password,
-        first_name,
-        last_name,
-        role,
-        wallet_id,
-        created_at,
-        updated_at
+        id, email, password, first_name, last_name, role, wallet_id, created_at, updated_at
     FROM users
-    WHERE id = p_id AND deleted_at IS NULL;
+    WHERE id = p_id;
 END;
 $$;
 
-
-
--- 4. Function: get_all_users
+-- 6. Function: get_all_users
 CREATE OR REPLACE FUNCTION get_all_users()
 RETURNS TABLE (
     id UUID,
-    email TEXT,
+    email VARCHAR(255),
     password TEXT,
-    first_name TEXT,
-    last_name TEXT,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
     role user_role,
     wallet_id UUID,
     created_at TIMESTAMP,
@@ -124,8 +106,7 @@ AS $$
     ORDER BY created_at DESC;
 $$;
 
-
--- 5. Procedure: update_user
+-- 7. Procedure: update_user
 CREATE OR REPLACE PROCEDURE update_user(
     IN p_id UUID,
     IN p_email VARCHAR,
@@ -161,9 +142,9 @@ BEGIN
 END;
 $$;
 
-
--- 6. FUNCTION: delete_user
-CREATE OR REPLACE FUNCTION delete_user(p_id UUID) RETURNS INTEGER AS $$
+-- 8. Function: delete_user
+CREATE OR REPLACE FUNCTION delete_user(p_id UUID)
+RETURNS INTEGER AS $$
 DECLARE
     rows_deleted INTEGER;
 BEGIN
@@ -173,9 +154,97 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- 9. Function: set_reset_token
+CREATE OR REPLACE FUNCTION set_reset_token(
+    p_email VARCHAR,
+    p_token UUID,
+    p_expiry TIMESTAMP
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE users
+    SET reset_token = p_token,
+        reset_token_expiry = p_expiry,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE email = p_email;
+END;
+$$;
+
+-- 10. Function: get_user_by_reset_token
+CREATE OR REPLACE FUNCTION get_user_by_reset_token(p_token UUID)
+RETURNS TABLE (
+    id UUID,
+    email VARCHAR(255),
+    password TEXT,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    role user_role,
+    wallet_id UUID,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        users.id,
+        users.email,
+        users.password,
+        users.first_name,
+        users.last_name,
+        users.role,
+        users.wallet_id,
+        users.created_at,
+        users.updated_at
+    FROM users
+    WHERE users.reset_token = p_token
+      AND users.reset_token_expiry > CURRENT_TIMESTAMP;
+END;
+$$;
+
+-- 11. Function: update_user_password
+CREATE OR REPLACE FUNCTION update_user_password(
+    p_user_id UUID,
+    p_password TEXT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    updated_count INTEGER;
+BEGIN
+    UPDATE users
+    SET password = p_password,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = p_user_id;
+
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+
+    IF updated_count = 0 THEN
+        RAISE EXCEPTION 'No user found with ID: %', p_user_id;
+    END IF;
+END;
+$$;
 
 
---- Create create_roles table
+-- 12. Function: clear_reset_token
+CREATE OR REPLACE FUNCTION clear_reset_token(p_user_id UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE users
+    SET reset_token = NULL,
+        reset_token_expiry = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = p_user_id;
+END;
+$$;
+
+-- Procedures to create roles and permissions tables
 CREATE OR REPLACE PROCEDURE create_roles_table()
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -186,8 +255,6 @@ BEGIN
 END;
 $$;
 
-
--- Create create_permissions table
 CREATE OR REPLACE PROCEDURE create_permissions_table()
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -198,8 +265,6 @@ BEGIN
 END;
 $$;
 
-
--- Create a table to store user roles
 CREATE OR REPLACE PROCEDURE create_user_roles_table()
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -211,7 +276,6 @@ BEGIN
 END;
 $$;
 
------ Create create_user_permissions table
 CREATE OR REPLACE PROCEDURE create_user_permissions_table()
 LANGUAGE plpgsql AS $$
 BEGIN
