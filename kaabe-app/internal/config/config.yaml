@@ -1,7 +1,0 @@
-app: 
-  name: kaabe
-  env: development
-
-redis:
-  address: localhost:6379
-  db: 0
